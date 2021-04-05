@@ -259,6 +259,14 @@ class Binding:
     def type(self) -> str:
         return self.nctype.cpp_type()
 
+    def with_name(self, *, name: str) -> 'Binding':
+        return Binding(
+            name=name,
+            ctype=self.ctype.with_name(name=name),
+            default=None,
+            argument=self.argument.with_name(name=name),
+        )
+
     def no_default(self) -> 'Binding':
         return Binding(
             name=self.name,
@@ -408,6 +416,12 @@ class DispatcherSignature:
     def name(self) -> str:
         return dispatcher.name(self.func)
 
+    def decl(self, name: Optional[str] = None) -> str:
+        args_str = ', '.join(a.decl() for a in self.arguments())
+        if name is None:
+            name = self.name()
+        return f"{self.returns_type().cpp_type()} {name}({args_str})"
+
     def defn(self, name: Optional[str] = None) -> str:
         args_str = ', '.join(a.defn() for a in self.arguments())
         if name is None:
@@ -438,6 +452,12 @@ class NativeSignature:
 
     def name(self) -> str:
         return self.prefix + native.name(self.func)
+
+    def decl(self, name: Optional[str] = None) -> str:
+        args_str = ', '.join(a.decl() for a in self.arguments())
+        if name is None:
+            name = self.name()
+        return f"{native.returns_type(self.func.returns).cpp_type()} {name}({args_str})"
 
     def defn(self, name: Optional[str] = None) -> str:
         args_str = ', '.join(a.defn() for a in self.arguments())
