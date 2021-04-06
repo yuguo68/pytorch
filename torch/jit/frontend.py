@@ -1,7 +1,9 @@
 import torch
 import sys
 import ast
+import astunparse
 import inspect
+import hashlib
 import string
 from textwrap import dedent
 from typing import List
@@ -18,8 +20,9 @@ from torch._C._jit_tree_views import (
 )
 from torch._utils_internal import get_source_lines_and_file
 
-from torch._jit_internal import SourceContext, should_drop, is_static_fn
+from torch._jit_internal import SourceContext, should_drop, is_static_fn, FunctionModifiers
 import torch.jit.annotations
+from typing import Tuple
 
 # Borrowed from cPython implementation
 # https://github.com/python/cpython/blob/561612d8456cfab5672c9b445521113b847bd6b3/Lib/textwrap.py#L411#
@@ -523,6 +526,89 @@ class StmtBuilder(Builder):
     @staticmethod
     def build_With(ctx, stmt):
         r = ctx.make_range(stmt.lineno, stmt.col_offset, stmt.col_offset + len("with"))
+        if isinstance(stmt.items[0].context_expr, ast.Call):
+            exp = stmt.items[0].context_expr
+            def process_ins_outs(args):
+                inputs = []
+                outputs = []
+                for arg in args:
+                    var_name = arg.arg
+                    var_ann = arg.value.value
+                    var_decl_type, var_ann = var_ann.split(":")
+                    if var_decl_type == "inp":
+                        inputs.append((var_name, var_ann))
+                    if var_decl_type == "out":
+                        outputs.append((var_name, var_ann))
+                return inputs, outputs
+
+            def create_hash_name(inputs, outputs):
+                name = ""
+                for i in inputs:
+                    var_name, var_ann = i
+                    name += var_name + var_ann
+                for i in outputs:
+                    var_name, var_ann = i
+                    name += var_name + var_ann
+                return hashlib.sha256(name.encode('utf-8')).hexdigest()
+
+            inputs, outputs = process_ins_outs(exp.keywords)
+
+            # build the replacement function str with given inputs and outputs
+            # underscore for the name because it is not exposed to outside
+            dummy_function_name = "_func_ignore_" + create_hash_name(inputs, outputs)
+            dummy_function_str = "\ndef " + dummy_function_name + "("
+            for var in inputs:
+                var_name, var_ann = var
+                dummy_function_str += var_name + " :" + var_ann + ", "
+            dummy_function_str = dummy_function_str[:-2] + ") -> "
+
+            return_type_ann = ""
+            return_statement_str ="return "
+            if len(outputs) == 1:
+                return_type_ann = outputs[0][1]
+                return_statement_str += outputs[0][0]
+            if len(outputs) > 1:
+                return_type_ann = "Tuple["
+                for var in outputs:
+                    var_name, var_ann = var
+                    return_type_ann += var_ann + ", "
+                    return_statement_str += var_name + ", "
+                return_type_ann = return_type_ann[:-2] + "]"
+                return_statement_str = return_statement_str[:-2]
+
+            dummy_function_str += return_type_ann + ": pass"
+            dummy_function = ast.parse(dummy_function_str).body[0]
+            # dump the body of context manager to dummy function
+            dummy_function.body = stmt.body
+
+            # insert return statement to the function
+            return_statement = ast.parse(return_statement_str).body[0]
+            dummy_function.body.append(return_statement)
+
+            # registers the custom function in the global context
+            ignore_func_str = astunparse.unparse(dummy_function)
+            ignore_func_str += "\nglobals()[\"{}\"] = {}".format(dummy_function_name, dummy_function_name)
+            ignore_func_str += "\nglobals()[\"{}\"]._torchscript_modifier = FunctionModifiers.IGNORE".format(dummy_function_name)
+            exec(ignore_func_str)
+
+            # build the statements as:
+            # <out_1>, <out_2>, ... = torch.jit.frontend.<func>(<in_1>, <in_2>)
+            assign_str_lhs = ""
+            for var in outputs:
+                var_name, _ = var
+                assign_str_lhs += var_name + ", "
+            assign_str_lhs = assign_str_lhs[:-2]
+
+            assign_str_rhs = "torch.jit.frontend.{}(".format(dummy_function_name)
+            for var in inputs:
+                var_name, _ = var
+                assign_str_rhs += var_name + ", "
+            assign_str_rhs = assign_str_rhs[:-2] + ")"
+
+            assign_str = assign_str_lhs + " = " + assign_str_rhs
+            assign_ast = ast.parse(assign_str).body[0]
+            return build_stmt(ctx, assign_ast)
+
         return With(r, build_withitems(ctx, stmt.items), build_stmts(ctx, stmt.body))
 
 class ExprBuilder(Builder):
