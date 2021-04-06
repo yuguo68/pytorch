@@ -319,8 +319,18 @@ public:
     __at_align32__ float tmp_exp[size()];
     store(tmp);
     exp.store(tmp_exp);
-    for (int64_t i = 0; i < size(); i++) {
+    for (int i = 0; i < size(); i++) {
       tmp[i] = std::atan2(tmp[i], tmp_exp[i]);
+    }
+    return loadu(tmp);
+  }
+  Vec256<float> copysign(const Vec256<float> &sign) const {
+    __at_align32__ float tmp[size()];
+    __at_align32__ float tmp_sign[size()];
+    store(tmp);
+    sign.store(tmp_sign);
+    for (int64_t i = 0; i < size(); i++) {
+      tmp[i] = std::copysign(tmp[i], tmp_sign[i]);
     }
     return loadu(tmp);
   }
