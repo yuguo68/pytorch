@@ -10,6 +10,15 @@ QTensorImpl::QTensorImpl(
     : TensorImpl(std::move(storage), key_set, data_type),
       quantizer_(quantizer) {}
 
+QTensorImpl::QTensorImpl(
+    Storage&& storage,
+    DispatchKeySet key_set,
+    const caffe2::TypeMeta data_type,
+    QuantizerPtr quantizer,
+    ImplType type)
+    : TensorImpl(std::move(storage), key_set, data_type, type),
+      quantizer_(quantizer) {}
+
 const char* QTensorImpl::tensorimpl_type_name() const {
   return "QTensorImpl";
 }
